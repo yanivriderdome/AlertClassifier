@@ -171,8 +171,10 @@ if debug:
     plt.xlabel('Importance', fontsize=14, labelpad=20)
     plt.show()
 best_features = [x for x in dset['attr']]
-features_to_use = best_features[:30]
+features_to_use = best_features[:50]
 df_RFE = Data_drop[features_to_use + ['label']]
+print(features_to_use)
+
 X_train, X_test, y_train, y_test = train_test_split(Data_drop[features_to_use], Data_drop['label'], test_size=0.3,
                                                     random_state=23, stratify=Data_drop['label'])
 
@@ -184,13 +186,13 @@ X_test, X_validation, y_test, y_validation = train_test_split(X_test, y_test, te
 #                                                     random_state=23, stratify=Data_drop['label'])
 X_test_falses = Data_drop[features_to_use][Data_drop['label'] == 0]
 scores = []
-for i in range(20, 25, 5):
-    for j in range(4, 5):
+for i in range(20, 55, 5):
+    for j in range(4, 11):
         model_RFE, best_score = model_training(X_train, X_validation, y_train, y_validation, i, j)
         precision = 1 - sum(model_RFE.predict(X_test_falses) / len(X_test_falses.index))
         scores.append([best_score["n_estimators"], best_score["depth"], best_score["fscore"], precision])
 
-model_RFE, best_score = model_training(X_train, X_test, y_train, y_test, 30, 8)
+model_RFE, best_score = model_training(X_train, X_test, y_train, y_test, 50, 8)
 accuracy_falses = 1 - np.sum(abs(model_RFE.predict(X_test_falses))) / len(X_test_falses.index)
 y_pred = model_RFE.predict(X_test)
 y_true = model_RFE.predict(X_test[y_test == 1])
@@ -198,13 +200,12 @@ y_true = model_RFE.predict(X_test[y_test == 1])
 accuracy_test_2 = 1 - np.sum(abs(y_test - y_pred)) / len(y_pred)
 print("Falses accuracy ", accuracy_falses)
 
-print(df_RFE.columns)
 
 model_RFE.save_model(ModelFileName)
 export_features(X_train)
 # plt.rcParams['figure.figsize'] = [20, 10]
 # plt.show()
-xgb.plot_importance(model_RFE)
+# xgb.plot_importance(model_RFE)
 
 df["Car"] = np.where(df['Class'] == 0, 1.0, 0.0)
 df["Bus"] = np.where(df['Class'] == 1, 1.0, 0.0)
