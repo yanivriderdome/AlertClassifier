@@ -98,7 +98,8 @@ Data["Bus"] = np.where(Data['Class'] == 1, 1.0, 0.0)
 Data["Truck"] = np.where(Data['Class'] == 2, 1.0, 0.0)
 Data["MotorCycle"] = np.where(Data['Class'] == 3, 1.0, 0.0)
 # Data["InTrafficByCars"] = np.where(Data['NCars'] > 3, 1.0, 0.0)
-del (Data['NCars'])
+if 'NCars' in Data.columns:
+    del (Data['NCars'])
 Data = Data[Data["ClassifierResultWithRules"] >= 0]
 Data_drop = Data.copy()
 for col in columns_to_drop:
