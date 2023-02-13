@@ -5,6 +5,7 @@ import xgboost as xgb
 from scipy.stats import gaussian_kde
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import math
+from sklearn.model_selection import train_test_split, RepeatedStratifiedKFold
 
 
 def CalculateCounter(x1, x2, x3):
@@ -58,7 +59,33 @@ def get_curvature(X, Y):
 def get_Xcoordinate(H1, H2, H3, H4, H5, H6, H7, H8, factor):
     return np.asarray([h * factor for h in [H1, H2, H3, H4, H5, H6, H7, H8]])
 
+def OneHotEncoding(Data):
+    # Data = Data[Data["Counter"] == 8]
+    Data["Car"] = np.where(Data['Class'] == 0, 1.0, 0.0)
+    Data["Bus"] = np.where(Data['Class'] == 1, 1.0, 0.0)
+    Data["Truck"] = np.where(Data['Class'] == 2, 1.0, 0.0)
+    Data["MotorCycle"] = np.where(Data['Class'] == 3, 1.0, 0.0)
+    return Data
 
+def RemoveUnwantedColumns(Data, columns_to_drop):
+    Data_drop = Data.copy()
+    for col in columns_to_drop:
+        if col in Data_drop.columns:
+            del (Data_drop[col])
+
+    for i in range(8):
+        if 'BoxWidths[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['BoxWidths[' + str(i) + ']'])
+        if 'BoxHeights[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['BoxHeights[' + str(i) + ']'])
+        del (Data_drop['BoxCenters[' + str(i) + ']'])
+        del (Data_drop['BoxBottoms[' + str(i) + ']'])
+        del (Data_drop['Angles[' + str(i) + ']'])
+        del (Data_drop['Distances[' + str(i) + ']'])
+        if 'TimeDeltas[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['TimeDeltas[' + str(i) + ']'])
+
+    return Data_drop
 def get_curvatureX(X, Y):
     dY = np.asarray(Y[1:]) - np.asarray(Y[:-1])
     dX = np.asarray(X[1:]) - np.asarray(X[:-1])
@@ -165,7 +192,7 @@ def add_features(df):
 def export_features(feature_Vec):
     File = open('Features.txt', 'w')
     for feature in feature_Vec:
-        if feature == 'label':
+        if feature == 'Label':
             continue
         if feature.find("Abs_") == -1 and not feature.lower() in \
                                               ["truck", "bus", "car", "MotorCycle", "motorcycle",
@@ -178,7 +205,7 @@ def export_features(feature_Vec):
 
 
 def plot_intersection_df(df, feature, quant=0.05):
-    return plot_intersection(df[feature][df['label'] == 0], df[feature][df['label'] == 1], feature, quant)
+    return plot_intersection(df[feature][df['Label'] == 0], df[feature][df['Label'] == 1], feature, quant)
 
 
 def plot_intersection(x0, x1, title, quant=0.05):
@@ -199,18 +226,18 @@ def plot_intersection(x0, x1, title, quant=0.05):
     kde1_x = kde1(x)
     inters_x = np.minimum(kde0_x, kde1_x)
 
-    plt.plot(x, kde0_x, color='b', label='False')
+    plt.plot(x, kde0_x, color='b', Label='False')
     plt.fill_between(x, kde0_x, 0, color='b', alpha=0.2)
-    plt.plot(x, kde1_x, color='orange', label='True')
+    plt.plot(x, kde1_x, color='orange', Label='True')
     plt.fill_between(x, kde1_x, 0, color='orange', alpha=0.2)
     plt.plot(x, inters_x, color='r')
-    plt.fill_between(x, inters_x, 0, facecolor='none', edgecolor='r', hatch='xx', label='intersection')
+    plt.fill_between(x, inters_x, 0, facecolor='none', edgecolor='r', hatch='xx', Label='intersection')
 
     area_inters_x = np.trapz(inters_x, x)
 
-    handles, labels = plt.gca().get_legend_handles_labels()
-    labels[2] += f': {area_inters_x * 100:.1f} %'
-    plt.legend(handles, labels)
+    handles, Labels = plt.gca().get_legend_handles_Labels()
+    Labels[2] += f': {area_inters_x * 100:.1f} %'
+    plt.legend(handles, Labels)
     plt.title(title)
     plt.tight_layout()
     plt.savefig(title + "_intersection.png")
@@ -240,6 +267,99 @@ def remove_outliers(vec, quant=0.05):
     vec[vec > np.quantile(vec, 1 - quant)] = np.quantile(vec, 1 - quant)
     return vec
 
+def model_training2(X_train, X_test, y_train, y_test, best_hyperparams):
+    accuracy_score_all = []
+    precision_list_test = []
+    recall_list_test = []
+    fscore_list_test = []
+    global model
+    # del (X['Label'])
+    for i in range(0, 9):
+        xgb_model = xgb.XGBClassifier(n_estimators=int(best_hyperparams['n_estimators']),
+                                      max_depth=int(best_hyperparams['max_depth']), gamma=best_hyperparams['gamma'],
+                                      colsample_bytree=best_hyperparams['colsample_bytree'],
+                                      min_child_weight=best_hyperparams['min_child_weight'],
+                                      reg_lambda=best_hyperparams['reg_lambda'],
+                                      reg_alpha=best_hyperparams['reg_alpha'])  # scale_pos_weight = 0.35,
+        # default parameter for XGBoost classifier
+        model = xgb_model.fit(X_train, y_train)
+
+        pred_train = xgb_model.predict(X_train)
+        pred_test = xgb_model.predict(X_test)
+        # pred_val = xgb_model.predict(X_val)
+
+        accuracy_train = accuracy_score(y_train, pred_train > 0.5)
+        accuracy_test = accuracy_score(y_test, pred_test > 0.5)
+        # accuracy_val = accuracy_score(y_val, pred_val>0.5)
+
+        # print("Train Accuracy SCORE:", accuracy_train)
+        # print("Test Accuracy SCORE:", accuracy_test)
+        # print ("Val Accuracy SCORE:", accuracy_val)
+
+        accuracy_score_all.append(accuracy_test)
+        # accuracy_score_val.append(accuracy_val)
+
+        precision_test, recall_test, fscore_test, _ = precision_recall_fscore_support(y_test, pred_test,
+                                                                                      average='weighted')
+        recall_list_test.append(recall_test)
+        recall_list_test.append(fscore_test)
+
+        # store the train performace values in list
+        precision_list_test.append(precision_test)
+        recall_list_test.append(recall_test)
+        fscore_list_test.append(fscore_test)
+
+        random_state = np.random.randint(100)
+        # acc_xgb = (preds == yv).sum().astype(float) / len(preds)*100
+
+    average_accuracy_score_all = np.mean(accuracy_score_all)
+    average_precision_score_all = np.mean(precision_list_test)
+    average_recall_score_all = np.mean(recall_list_test)
+    average_fscore_score_all = np.mean(fscore_list_test)
+    # average_accuracy_score_val= np.mean(accuracy_score_val)
+    print("Average test accuracy: ", average_accuracy_score_all)
+    print("Average precison: ", average_precision_score_all)
+    print("Average recall: ", average_recall_score_all)
+    print("Average fscore: ", average_fscore_score_all)
+    print()
+    score = { "accuracy": average_accuracy_score_all,
+             "precision": average_precision_score_all, "recall": average_recall_score_all,
+             "fscore": average_fscore_score_all}
+    return model, score
+
+
+def objective(space, X_train, X_test, y_train, y_test):
+    clf = xgb.XGBClassifier(
+        n_estimators=int(space['n_estimators']), max_depth=int(space['max_depth']), gamma=space['gamma'],
+        reg_alpha=int(space['reg_alpha']), min_child_weight=int(space['min_child_weight']),
+        colsample_bytree=int(space['colsample_bytree']))
+
+    evaluation = [(X_train, y_train), (X_test, y_test)]
+
+    clf.fit(X_train, y_train,
+            eval_set=evaluation, eval_metric="auc",
+            early_stopping_rounds=10, verbose=False)
+
+    pred = clf.predict(X_test)
+    accuracy = accuracy_score(y_test, pred > 0.5)
+    print("SCORE:", accuracy)
+    return {'loss': -accuracy, 'status': STATUS_OK}
+
+def model_train(Data_drop, features, n_estimators=40, max_depth=8):
+    X_train, X_test, y_train, y_test = train_test_split(Data_drop[features], Data_drop['Label'], test_size=0.3,
+                                                        random_state=23, stratify=Data_drop['Label'])
+
+    # X_test, X_validation, y_test, y_validation = train_test_split(X_test, y_test, test_size=0.7,
+    #                                                               random_state=23, stratify=y_test)
+    X_test_falses = Data_drop[features][Data_drop['Label'] == 0]
+    X_test_trues = Data_drop[features][Data_drop['Label'] == 1]
+
+    model_RFE, best_score = model_training(X_train, X_test, y_train, y_test, n_estimators, max_depth)
+    accuracy_falses = 1 - np.sum(abs(model_RFE.predict(X_test_falses))) / len(X_test_falses.index)
+    print("Falses accuracy", accuracy_falses, ",", np.sum(model_RFE.predict(X_test_falses)), "Falses")
+    accuracy_trues = 1 - np.sum(abs(model_RFE.predict(X_test_trues) - 1)) / len(X_test_trues.index)
+    print("Trues accuracy", accuracy_trues, ",", np.sum(abs(model_RFE.predict(X_test_trues) - 1)), "Missed Trues")
+    return model_RFE
 
 def model_training(X_train, X_test, y_train, y_test, n_estimators=30, depth=5, Lambda=0):
     random_state = 123
@@ -248,14 +368,14 @@ def model_training(X_train, X_test, y_train, y_test, n_estimators=30, depth=5, L
     recall_list_test = []
     fscore_list_test = []
     global model
-    # del (X['label'])
+    # del (X['Label'])
     for i in range(0, 9):
         # print("Random_state", random_state)
         # Xt, Xv, yt, yv = train_test_split(X_SDA, y_SDA , test_size=0.3, random_state=random_state,stratify=y_SDA)
 
         # X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, test_size=0.5)
-        # dt = xgb.DMatrix(Xt, label=yt.values)
-        # dv = xgb.DMatrix(Xv, label=yv.values)
+        # dt = xgb.DMatrix(Xt, Label=yt.values)
+        # dv = xgb.DMatrix(Xv, Label=yv.values)
         # scale_pos_weight=-1 + 1 / np.mean(y),
         xgb_model = xgb.XGBClassifier(n_estimators=n_estimators, max_depth=depth,
                                       reg_lambda=Lambda)  # scale_pos_weight = 0.35,
