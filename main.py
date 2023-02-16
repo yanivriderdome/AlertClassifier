@@ -1,7 +1,6 @@
 import warnings
 from FeatureExtractor import *
 from sklearn.feature_selection import RFECV
-from hyperopt import Trials, fmin, hp, tpe
 from DataTagger import *
 
 warnings.filterwarnings('ignore')
@@ -17,16 +16,23 @@ columns_to_drop = ['NCars', "MinBoxArea", "MaxBoxArea", "MinDistance", "MaxDista
 
 AlertType = 'BlindSpot'  # 'Front_Collision'  # 'BlindSpot' # 'Safe_Distance'
 ModelFileName = AlertType.replace("_", "") + 'Model.json'
-DataFileName = "BlindSpots.csv"
+DataFileName = "FrontAlerts.csv"
 # DataFileName = "BlindSpotsHeavyBike.csv"
 reLabelData = False
-optimize_featurs = True
-
+optimize_featurs = False
+OptimizeNFeatures = False
+AddSpeed = False
 if reLabelData:
     df = LabelData(DataFileName)
 else:
     df = pd.read_csv(DataFileName)
-
+if AddSpeed:
+    speeds = pd.read_csv("Speeds.csv")
+    speeds["Speed"] = speeds.apply(lambda x: correct_text(x["Speed"], x['text']), axis = 1)
+    speeds.to_csv("Speeds.csv", index=False)
+    df2 = pd.merge(df, speeds, on=['Black Box Filename', 'Black Box Frame Number'], how='left')
+    df2.fillna(-1)
+    df2.to_csv("FrontAlertsSpeeds.csv", index=False)
 if AlertType.lower().find('blind') != - 1:
     videos_directory = r"D:\Camera Roll\Alerts\Blindspot"
     DataFileName = "BackAlerts.csv"
@@ -34,14 +40,11 @@ if AlertType.lower().find('blind') != - 1:
 
     alert_string = "blind"
     df["MaxMinAngleCloserSide"] = df["MaxAngleToCloserSide"] - df["MinAngleToCloserSide"]
-    # df["MaxDistanceMinDistanceOuterSide"] = df["MaxDistanceToSideOuter"] - df["OuterBoxDistanceToSide"]
 
     df["AngleMinusMin"] = df["AbsAngle"] - df["MinAngle"]
-    # df["MaxMinusAngle"] = df["MaxAngle"] - df["AbsAngle"]
 
     df["AngleToCloserSideMinusMin"] = abs(df["AngleToCloserSide"]) - abs(df["MinAngleToCloserSide"])
-    # df["MaxMinusAngleToCloserSide"] = abs(df["MaxAngleToCloserSide"]) - abs(df["AngleToCloserSide"])
-    df["MovmentAngleTan"] = df["HorizontalMovement"] / (df["VerticalMovement"] + 0.000000000001)
+    df["MovementAngleTan"] = df["HorizontalMovement"] / (df["VerticalMovement"] + 0.000000000001)
     df["PredictedAngle"] = df["AbsAnglesFit.Intercept"] + 25 * df["AbsAnglesFit.Slope"]
     df["PredictedAngleToCloserSide"] = df["AbsAnglesToCloserSideFit.Intercept"] + \
                                        25 * df["AbsAnglesToCloserSideFit.Slope"]
@@ -87,7 +90,7 @@ for x in Data_drop.columns:
 cols = list(Data_drop.columns.values)
 cols.pop(cols.index('Label'))
 Features = cols
-Data_drop = Data_drop[Data_drop["Label"] != -1]
+Data_drop = Data_drop[(Data_drop["Label"] == 0) | (Data_drop["Label"] == 1)]
 
 X = Data_drop.drop(['Label'], axis=1)
 y_data = Data_drop['Label']
@@ -106,9 +109,9 @@ if optimize_featurs:
                   scoring='accuracy')
     rfecv.fit(X, target)
     print('Optimal number of features: {}'.format(rfecv.n_features_))
-    print(np.where(rfecv.support_ == False)[0])
+    print(np.where(rfecv.support_ is False)[0])
 
-    X.drop(X.columns[np.where(rfecv.support_ == False)[0]], axis=1, inplace=True)
+    X.drop(X.columns[np.where(rfecv.support_ is False)[0]], axis=1, inplace=True)
     dset = pd.DataFrame()
     dset['attr'] = X.columns
     dset['importance'] = rfecv.estimator_.feature_importances_
@@ -124,6 +127,7 @@ if optimize_featurs:
 
     best_features = [x for x in dset['attr']]
 else:
+    # blind spots
     best_features = ['LaneSplitting', 'PredictedX', 'BoxInnerSideFit.Intercept', 'SideDetected', 'Car',
                      'MedianTimeToCollision', 'DistanceOverArea', 'Bus', 'AnglesSTD', 'BoxBottom', 'HorizontalMovement',
                      'RotationsFit.Slope', 'BoxTop', 'RotationsFit.Intercept', 'DistanceFromClosestCorner', 'DistanceX',
@@ -136,12 +140,14 @@ else:
                      'AbsAnglesToCloserSideFit.Slope', 'BoxArea', 'Truck', 'BoxWidthsFit.Intercept',
                      'BoxBottomFit.Slope', 'AbsAnglesFit.Slope', 'AbsAngle']
     # best_features = ['LaneSplitting', 'PredictedX', 'BoxInnerSideFit.Intercept', 'SideDetected', 'Car', 'MedianTimeToCollision', 'DistanceOverArea', 'Bus', 'BoxBottom', 'HorizontalMovement', 'RotationsFit.Slope', 'BoxTop', 'DistanceFromClosestCorner', 'DistanceX', 'DistanceY', 'MotorCycle', 'PhysicalRotation', 'Rotation',  'MaxMinAngle8Frames', 'RearDetected', 'AbsMedianAngularVelocity', 'Distance', 'VerticalMovement', 'AngleFromTop', 'DistanceFromClosestCornerPower', 'RelativeSpeedKMH', 'VectorToSide', 'MedianDistance', 'AbsXFit.Slope', 'AngleToCloserSide', 'AngleFromHorizon', 'YFit.Intercept', 'AbsAnglesToFurtherSideFit.Intercept', 'MovementRadius',  'BoxAreasFit.Slope', 'AbsAnglesToCloserSideFit.Slope', 'BoxArea', 'Truck', 'BoxWidthsFit.Intercept',  'BoxBottomFit.Slope', 'AbsAnglesFit.Slope', 'AbsAngle']
+# front alerts
+# best_features = ['MinDistanceToSideOuter', 'InnerBoxDistanceToSide', 'MotorCycle', 'DistanceX', 'BoxArea', 'BoxHeightsFit.Intercept', 'AngleFromTop', 'BoxAreasFit.Intercept', 'MaxMinusAngleToCloserSide', 'Rotation', 'RotationsFit.Intercept', 'Car', 'MaxMinusBoxBottom', 'YFit.Intercept', 'DistanceOverArea', 'BoxInnerSideFit.Slope', 'DistanceY', 'SideDetected', 'BoxInnerSideFit.Intercept', 'AngleToCloserSide', 'BoxTop', 'BoxOuterSideFit.Intercept', 'PredictedX', 'BoxBottom', 'AbsAnglesFromTopFit.Slope', 'MaxMinusAngle', 'Distance', 'MedianDistance', 'AngleFromHorizon', 'AbsAnglesToFurtherSideFit.Intercept', 'XFitRadius', 'VectorToSide', 'AbsAnglesFromHorizonFit.Intercept', 'RelativeSpeedKMH', 'AbsAnglesFromTopFit.Intercept', 'AbsAnglesToCloserSideFit.Intercept', 'AngleMinusMin', 'MaxMinAngleToCloserSide', 'BoxBottomMinusMIn']
 
 features_to_use = best_features
 
 df_RFE = Data_drop[features_to_use + ['Label']]
 print(features_to_use)
-OptimizeNFeatures = False
+
 if OptimizeNFeatures:
     for i in range(0, 20):
         features = features_to_use[:-i]
@@ -175,8 +181,7 @@ if OptimizeHyperPrams:
     print(best_hyperparams)
 
 features = features_to_use
-
-model_RFE = model_train(Data_drop, features, 20, 6)
+model_RFE = model_train(Data_drop, features, 40, 8)
 
 model_RFE.save_model(ModelFileName)
 export_features(Data_drop[features])

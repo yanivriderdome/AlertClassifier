@@ -6,6 +6,58 @@ from scipy.stats import gaussian_kde
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import math
 from sklearn.model_selection import train_test_split, RepeatedStratifiedKFold
+from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
+
+def get_speed_from_text(text):
+    parsed_text = str(text).split(" ")
+    if len(parsed_text) > 2:
+        found = False
+        for i, x in enumerate(parsed_text):
+            if x.find('km') != -1 and i > 0:
+                speed = parsed_text[i - 1]
+                speed = "".join([char for char in speed if char.isdigit() or char == "."])
+                found = True
+                break
+        if not found:
+            try:
+                speed = float(speed)
+            except:
+                return -1
+        return speed
+    else:
+        found = False
+        for x in parsed_text:
+            if x.find('km') != -1:
+                speed = x.split('km')[0]
+                found = True
+                break
+        if not found:
+            for x in parsed_text[::-1]:
+                try:
+                    return float(x)
+                except:
+                    if x.find(":") == -1:
+                        new_string = "".join([new_char for new_char in x if (new_char.isdigit() or new_char == '.')])
+                        if len(new_string) > 0:
+                            try:
+                                return float(new_string)
+                            except:
+                                pass
+            speed = parsed_text[0]
+
+    return speed
+
+
+def correct_text(speed, text):
+    if text is None and speed is None:
+        return -1
+    try:
+        float(speed)
+        if speed > 100:
+            return speed / 10
+        return speed
+    except:
+        return get_speed_from_text(text)
 
 
 def CalculateCounter(x1, x2, x3):
