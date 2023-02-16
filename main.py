@@ -14,13 +14,13 @@ columns_to_drop = ['NCars', "MinBoxArea", "MaxBoxArea", "MinDistance", "MaxDista
                    'BoxLeftsFit.Slope', 'BoxRightsFit.Intercept', 'BoxRightsFit.Slope', 'BoxWidth', 'BoxWidthPrev',
                    'BoxBottomPrev', 'BoxCenter', 'BoxCenterPrev', "DistanceToSideOuterPrev", "DistanceToSideInnerPrev"]
 
-AlertType = 'BlindSpot'  # 'Front_Collision'  # 'BlindSpot' # 'Safe_Distance'
+AlertType = 'Front_Collision'  # 'Front_Collision'  # 'BlindSpot' # 'Safe_Distance'
 ModelFileName = AlertType.replace("_", "") + 'Model.json'
 DataFileName = "FrontAlerts.csv"
 # DataFileName = "BlindSpotsHeavyBike.csv"
-reLabelData = False
+reLabelData = True
 optimize_featurs = False
-OptimizeNFeatures = False
+Optimize_NFeatures = False
 AddSpeed = False
 if reLabelData:
     df = LabelData(DataFileName)
@@ -148,7 +148,7 @@ features_to_use = best_features
 df_RFE = Data_drop[features_to_use + ['Label']]
 print(features_to_use)
 
-if OptimizeNFeatures:
+if Optimize_NFeatures:
     for i in range(0, 20):
         features = features_to_use[:-i]
         print(i)

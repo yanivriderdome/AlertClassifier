@@ -1,3 +1,5 @@
+import os.path
+
 import pandas as pd
 import numpy as np
 
@@ -92,6 +94,7 @@ def CorrectAbsSpeed(df_tagged, new_df):
 def LabelData(new_data_folder, tagged_data_folder=None):
     if tagged_data_folder is None:
         tagged_data_folder = new_data_folder.replace(".csv", "_tagged.csv")
+        tagged_data_folder = os.path.join("Tagged_Data", tagged_data_folder)
     df_new = pd.read_csv(new_data_folder)
     df_new.sort_values(by=['Black Box Filename', "Id", "Black Box Frame Number"], inplace=True)
     df_tagged = pd.read_csv(tagged_data_folder)
