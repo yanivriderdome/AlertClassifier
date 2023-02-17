@@ -90,19 +90,44 @@ def CorrectAbsSpeed(df_tagged, new_df):
         new_df[(new_df["Black Box Filename"] == filename) & (new_df["Black Box Filename"] == frame_number)]["AbsoluteSpeedKMH"] = speed
     return new_df
 
+def FixFileNames(df):
+    df_shifted2 = df.shift(-1)
 
-def LabelData(new_data_folder, tagged_data_folder=None):
-    if tagged_data_folder is None:
-        tagged_data_folder = new_data_folder.replace(".csv", "_tagged.csv")
-        tagged_data_folder = os.path.join("Tagged_Data", tagged_data_folder)
-    df_new = pd.read_csv(new_data_folder)
+    df["Idm1"] = df_shifted2["Id"]
+    print("Replacing the following false filenames")
+    for i in [3, 2, 1]:
+        df_shifted1 = df.shift(i)
+
+        df["Filename1"] = df_shifted1["Black Box Filename"]
+        df["Id1"] = df_shifted1["Id"]
+        df["FrameNumber1"] = df_shifted1["Black Box Frame Number"]
+
+        df['False Filename'] = df.apply(lambda x: (x["Filename1"] != x["Black Box Filename"] and x["Id1"] == x["Id"])
+                                        and x["Id1"] != x["Idm1"] and abs(x["Black Box Frame Number"] - x["FrameNumber1"]) < 3, axis=1)
+        df["Black Box Filename"][df['False Filename']] = df["Filename1"][df['False Filename']]
+
+        for x in df.index[df['False Filename']]:
+            print(x, df["Black Box Filename"][x], df["Black Box Frame Number"][x], df["Id"][x])
+    print("===========================================================")
+    return df
+
+
+
+def LabelData(new_data_filename, tagged_data_filename=None):
+    if tagged_data_filename is None:
+        tagged_data_filename = new_data_filename.replace(".csv", "_tagged.csv")
+        tagged_data_filename = os.path.join("Tagged_Data", tagged_data_filename)
+
+    df_new = pd.read_csv(new_data_filename)
     df_new.sort_values(by=['Black Box Filename', "Id", "Black Box Frame Number"], inplace=True)
-    df_tagged = pd.read_csv(tagged_data_folder)
-    # df_new["Label"] = -2
-    df_new["label"] = df_new.apply(lambda x: BasicLabel(x["Class"], x["Black Box Filename"], x["Label"]), axis=1)
 
-    min_id_new = get_min_id(df_new)
-    df_new["id_per_video"] = df_new.apply(lambda x: set_min_id(x["Id"], x["Black Box Filename"], min_id_new), axis=1)
+    df_tagged = pd.read_csv(tagged_data_filename)
+    df_new["Label"] = df_new.apply(lambda x: BasicLabel(x["Class"], x["Black Box Filename"], x["Label"]), axis=1)
+    df_new = FixFileNames(df_new)
+    min_id_per_video_new = get_min_id(df_new)
+
+    df_new["id_per_video"] = df_new.apply(lambda x: set_min_id(x["Id"], x["Black Box Filename"], min_id_per_video_new), axis=1)
+
     min_id = get_min_id(df_tagged)
     df_tagged["id_per_video"] = df_tagged.apply(lambda x: set_min_id(x["Id"], x["Black Box Filename"], min_id), axis=1)
     false_true_vehicle_list = get_false_ids(df_tagged)
@@ -121,6 +146,6 @@ def LabelData(new_data_folder, tagged_data_folder=None):
     ind1 = np.where(np.asarray(cols) == "Label")[0][0]
     del (cols2[ind1])
     df_new = df_new[cols2]
-    df_new.to_csv(new_data_folder.replace(".csv", "_tagged_NEW.csv"), index=False)
-    df_new = CorrectAbsSpeed(df_tagged, df_new)
+    df_new.to_csv(new_data_filename.replace(".csv", "_tagged_NEW.csv"), index=False)
+    # df_new = CorrectAbsSpeed(df_tagged, df_new)
     return df_new
