@@ -4,23 +4,26 @@ from sklearn.feature_selection import RFECV
 from DataTagger import *
 from sklearn.metrics import recall_score
 from sklearn.preprocessing import OneHotEncoder
+from scipy import stats
+import random
+from ray import tune
 
 warnings.filterwarnings('ignore')
 pd.options.display.max_columns = None
 
 columns_to_drop = ['NCars', "MinBoxArea", "MaxBoxArea", "MinDistance", "MaxDistance", 'Black Box Frame Number',
                    'Black Box Filename', "Alert Type", "HeightVSWidthFactor",
-                   'TimeStamp', 'Filename', 'alert_type', 'Frame_Number', 'Id',"AbsSpeedKmh",
+                   'TimeStamp', 'Filename', 'alert_type', 'Frame_Number', 'Id', "AbsSpeedKmh",
                    'ClassifierResult', 'Angle', "ClassifierResultWithRules", "AbsSpeedKMH", "TiltAngle",
                    "BoxLeft", "BoxRight", 'BoxWidth', 'BoxWidthPrev', "ClostestVehicle",
                    'BoxBottomPrev', 'BoxCenter', 'BoxCenterPrev', "DistanceToSideOuterPrev", "DistanceToSideInnerPrev"]
 
-AlertType = 'Front_Collision'  # 'Front_Collision'  # 'BlindSpot' # 'Safe_Distance'
+AlertType = 'BlindSpots'  # 'Front_Collision'  # 'BlindSpot' # 'Safe_Distance'
 ModelFileName = AlertType.replace("_", "") + 'Model.json'
-DataFileName = "FrontAlerts.csv"
+DataFileName = "BlindSpots.csv"
 # DataFileName = "BlindSpotsHeavyBike.csv"
 reLabelData = False
-optimize_featurs = True
+optimize_featurs = False
 Optimize_NFeatures = False
 AddSpeed = False
 
@@ -34,22 +37,38 @@ if AddSpeed:
     # speeds["Speed"] = speeds.apply(lambda x: correct_text(x["Speed"], x['text']), axis=1)
     # speeds.to_csv("Speeds.csv", index=False)
     df = pd.merge(df, speeds, on=['Black Box Filename', 'Black Box Frame Number'], how='left')
-    df.fillna(-1,inplace=True)
+    df.fillna(-1, inplace=True)
     df.to_csv("FrontAlertsSpeeds.csv", index=False)
 
-if AlertType.lower().find('blind') != - 1:
-    videos_directory = r"D:\Camera Roll\Alerts\Blindspot"
-    DataFileName = "BackAlerts.csv"
-    TaggedDataFileName = "BackAlerts.csv"
 
-    alert_string = "blind"
+def GetDistanceFromHorizonFit(BoxBottoms, BoxCenterX):
+    BoxBottoms = [x - 0.4 for x in BoxBottoms if x != -1]
+    BoxCenterX = [x - 0.5 for x in BoxCenterX if x != -1]
+    distance = ([np.sqrt(x * x + y * y) for (x, y) in zip(BoxBottoms, BoxCenterX)])
+    result = stats.theilslopes(distance)
+    return result
+
+
+if AlertType.lower().find('blind') != - 1:
+    for column in ["MedianVelocity", "TimeToCollision", "TimeToCollisionFullSeries", "Acceleration",
+                   "MomentarySpeed16"]:
+        del (df[column])
+    df["DistancesFromHorizonFit.Slope"] = df.apply(
+        lambda x: GetDistanceFromHorizonFit([x["BoxBottoms[" + str(i) + "]"] for i in range(8)],
+                                            [x["BoxCenters[" + str(i) + "]"] / 100 for i in range(8)])[0], axis=1)
+    df["DistancesFromHorizonFit.Intercept"] = df.apply(
+        lambda x: GetDistanceFromHorizonFit([x["BoxBottoms[" + str(i) + "]"] for i in range(8)],
+                                            [x["BoxCenters[" + str(i) + "]"] / 100 for i in range(8)])[1], axis=1)
+
     df["MaxMinAngleCloserSide"] = df["MaxAngleToCloserSide"] - df["MinAngleToCloserSide"]
-    df["AngleSlopeOverStd"] = df["AbsAnglesFit.Slope"]/df["AnglesSTD"]
-    del(df["MedianTimeToCollision"])
+    df["AngleSlopeOverStd"] = df["AbsAnglesFit.Slope"] / df["AnglesSTD"]
+    df["DistanceToVehicleSide"] = df.apply(lambda x: x["Distance"] * np.cos(abs(x["AngleToCloserSide"])), axis=1)
     df["AngleMinusMin"] = df["AbsAngle"] - df["MinAngle"]
     df["AngleHorizonRatio"] = df["AngleFromHorizon"] / (df["AngleFromTop"] + 0.000000000000001)
     df["AnglesFit/BoxAreaFit"] = df["AbsAnglesFit.Slope"] / (df["BoxAreasFit.Slope"] + 0.000000000000001)
     df["BoxBottomMinusMax"] = df["BoxBottom"] - df["MaxBoxBottom"]
+    df["BoxBottomMinusMin"] = df["BoxBottom"] - df["MinBoxBottom"]
+    df["BoxDistanceToSideMinusMin"] = df["BoxDistanceToSideOuter"] - df["MinDistanceToSideOuter"]
 
     df["AngleToCloserSideMinusMin"] = abs(df["AngleToCloserSide"]) - abs(df["MinAngleToCloserSide"])
     df["MovementAngleTan"] = df["HorizontalMovement"] / (df["VerticalMovement"] + 0.000000000001)
@@ -58,8 +77,6 @@ if AlertType.lower().find('blind') != - 1:
                                        25 * df["AbsAnglesToCloserSideFit.Slope"]
     df["AnglesRatio"] = df["AbsAnglesFromHorizonFit.Slope"] / (df["AbsAnglesFit.Slope"] + 0.00000000001)
 else:
-    videos_directory = r"D:\Camera Roll\Alerts\Front Alerts"
-
     df["ZScore"] = (df["MomentarySpeed"] - df["FinalSpeed"]) / (df["VelocitySTD"] + 0.00000001)
     columns_to_drop = columns_to_drop + ["MinBoxBottom", "MaxBoxBottom", "MinAngle", "MaxAngle"]
     alert_string = "front"
@@ -74,8 +91,8 @@ df.replace('#REF!', 0, inplace=True)
 df.replace('inf', 1000000, inplace=True)
 df = OneHotEncoding(df)
 df["temp"] = df["Black Box Filename"].map(lambda x: x.find("Harley"))
-df = df[df["temp"]==-1]
-del(df["temp"])
+df = df[df["temp"] == -1]
+del (df["temp"])
 if AlertType.lower().find('blind') == -1:
     Data = df.loc[df["Alert Type"] == AlertType]
 else:
@@ -88,7 +105,7 @@ Data_drop = RemoveUnwantedColumns(Data, columns_to_drop, AlertType)
 cols = list(Data_drop.columns.values)
 cols.pop(cols.index('Label'))
 Features = cols
-Data_drop.fillna(-1,inplace=True)
+Data_drop.fillna(-1, inplace=True)
 X = Data_drop.drop(['Label'], axis=1)
 y = Data_drop['Label']
 
@@ -134,65 +151,105 @@ else:
                      'YFit.Intercept', 'PhysicalRotation', 'IntersectionWithScreenIntercept',
                      'AbsMedianAngularVelocity', 'RotationsFit.Slope', 'XFitRadius']
 
-    # best_features = ['LaneSplitting', 'PredictedX', 'BoxInnerSideFit.Intercept', 'SideDetected', 'Car', 'MedianTimeToCollision', 'DistanceOverArea', 'Bus', 'BoxBottom', 'HorizontalMovement', 'RotationsFit.Slope', 'BoxTop', 'DistanceFromClosestCorner', 'DistanceX', 'DistanceY', 'MotorCycle', 'PhysicalRotation', 'Rotation',  'MaxMinAngle8Frames', 'RearDetected', 'AbsMedianAngularVelocity', 'Distance', 'VerticalMovement', 'AngleFromTop', 'DistanceFromClosestCornerPower', 'RelativeSpeedKMH', 'VectorToSide', 'MedianDistance', 'AbsXFit.Slope', 'AngleToCloserSide', 'AngleFromHorizon', 'YFit.Intercept', 'AbsAnglesToFurtherSideFit.Intercept', 'MovementRadius',  'BoxAreasFit.Slope', 'AbsAnglesToCloserSideFit.Slope', 'BoxArea', 'Truck', 'BoxWidthsFit.Intercept',  'BoxBottomFit.Slope', 'AbsAnglesFit.Slope', 'AbsAngle']
-# front 
+# front
+best_features = ['MinDistanceToSideOuter', 'MaxDistanceToSideOuter', 'BoxDistanceToSideInner', 'MotorCycle', 'DistanceOverArea', 'VectorToSide', 'BoxWidthFront', 'RotationsFit.Intercept', 'BoxWidthsFit.Intercept', 'BoxHorizontalMovement', 'Truck', 'BoxWidthSide', 'Rotation', 'BoxBottomMinusMax', 'AngleHorizonRatio', 'BoxWidthsFit.Slope', 'MaxAngleToCloserSide', 'BoxHeightsFit.Slope', 'MaxMinusAngle', 'MaxMinusAngleToCloserSide', 'TimeToCollisionBoxAreaFullSeries', 'AngleFromTop', 'Orientation', 'Distance', 'BoxBottomFit.Intercept', 'AbsAnglesFromHorizonFit.Intercept', 'DistanceX', 'MinAngle', 'MinBoxBottom', 'BoxOuterSideFit.Intercept', 'XFitRadius', 'RotationsFit.Slope', 'MaxDistanceX', 'AbsAnglesToFurtherSideFit.Slope', 'MaxBoxBottom', 'BoxBottom', 'MedianDistance', 'MaxMinAngleCloserSide', 'DistanceFromClosestCornerPower', 'MinAngleToCloserSide', 'MaxAngle', 'BoxAreasFit.Slope', 'MaxMinDist8Frames', 'HorizontalMovement', 'IntersectionWithScreenIntercept', 'BoxArea', 'DistanceToOuterSideDiff', 'AbsAnglesFromTopFit.Intercept', 'BoxInnerSideFit.Slope', 'BoxTop', 'BoxHeightsFit.Intercept', 'BoxOuterSideFit.Slope', 'BoxAreasFit.Intercept', 'AbsAnglesFromTopFit.Slope', 'PredictedX', 'BoxBottomMinusMin', 'DistanceY', 'BoxInnerSideFit.Intercept', 'AreaRatio8Frames', 'FinalSpeed', 'AngleFromHorizon', 'DistancesFit.Intercept', 'BoxCenterNormalizedMovementInX', 'AngleMinusMin', 'YFit.Slope', 'Car']
 
 features_to_use = best_features
 
 df_RFE = Data_drop[features_to_use + ['Label']]
 print(features_to_use)
 
-OptimizeHyperPrams = False
+OptimizeHyperPrams = True
 
 features = features_to_use
-# features = ['LaneSplitting', 'Car', 'AreaRatio8Frames', 'RearDetected', 'MaxDistanceX', 'VectorToSide', 'RotationsFit.Intercept', 'AngleFromTop', 'TimeToCollision', 'HorizontalMovement', 'FinalSpeed', 'AbsAngle', 'FrontDetected', 'BoxHeightsFit.Intercept', 'DistanceOverArea', 'SideDetected', 'AngleToCloserSide', 'BoxBottom', 'BoxWidthsFit.Slope', 'DistanceFromClosestCorner', 'MaxMinAngle8Frames', 'DistanceX', 'Bus', 'DistanceY', 'BoxTop', 'AbsAnglesToFurtherSideFit.Slope', 'BoxDistanceToSideInner', 'RotationsFit.Slope', 'AbsAnglesFromHorizonFit.Intercept', 'BoxBottomFit.Intercept', 'YFit.Slope', 'Rotation', 'XFitRadius', 'BoxInnerSideFit.Slope', 'AnglesSTD', 'MedianVelocity', 'BoxInnerSideFit.Intercept', 'BoxDistanceToSideOuter', 'AbsAnglesFit.Slope', 'MovementRadius', 'AbsAnglesToCloserSideFit.Intercept', 'BoxHorizontalMovement', 'AbsAnglesFromTopFit.Slope', 'VelocitySTD', 'BoxOuterSideFit.Intercept', 'BoxWidthsFit.Intercept', 'AbsXFit.Slope', 'AbsAnglesToFurtherSideFit.Intercept', 'BoxHeightsFit.Slope', 'BoxCenterMovementInX', 'MaxMinBoxArea8Frames', 'AbsAnglesFromTopFit.Intercept', 'DistanceFromClosestCornerPower', 'BoxAreasFit.Slope', 'AbsAnglesFit.Intercept', 'MaxMinDist8Frames', 'BoxCenterMovementInY', 'PredictedX', 'DistancesFit.Intercept', 'BoxAreasFit.Intercept', 'BoxVerticalMovement', 'VerticalMovement', 'AbsMedianAngularVelocity', 'Distance', 'AngleFromHorizon', 'MovementAngle', 'MedianTimeToCollision', 'PhysicalRotation', 'YFit.Intercept', 'BoxArea', 'AbsAnglesFromHorizonFit.Slope', 'Acceleration', 'DistanceXInCollision', 'BoxOuterSideFit.Slope', 'MedianDistance']
-Data_drop["weights"] = Data["Black Box Filename"].map(lambda x: 4 if "Harley" in x else 1)
 
-X_train, X_test, y_train, y_test = train_test_split(Data_drop[features_to_use + ['weights']], Data_drop['Label'], test_size=0.3,
-                                                    random_state=23, stratify=Data_drop['Label'])
-train_weights = X_train["weights"].copy()
-del(X_train["weights"])
-del(X_test["weights"])
+Data_drop["weights"] = Data["Black Box Filename"].map(lambda x: 1 if "Harley" in x else 1)
 
-dtrain = xgb.DMatrix(X_train, label=y_train, weight=train_weights)
-dtest = xgb.DMatrix(X_test, label=y_test)
-xgb_params = {'max_depth': 8,  #
-              'objective': 'binary:logistic',
-              'eval_metric': 'aucpr'
-              }
+Data_drop["Black Box Filename"] = Data["Black Box Filename"]
+filenames = list(Data["Black Box Filename"].unique())
+Train_set_size = int(len(filenames) * 0.8)
+train_files = random.sample(filenames, Train_set_size)
+test_files = [x for x in filenames if x not in train_files]
+
+train = Data_drop[Data["Black Box Filename"].isin(train_files)]
+test = Data_drop[Data["Black Box Filename"].isin(test_files)]
+X_train = train[features_to_use + ['weights']]
+X_test = test[features_to_use]
+y_train = train['Label']
+y_test = test['Label']
+
+# X_train, X_test, y_train, y_test = train_test_split(Data_drop[features_to_use + ['weights']], Data_drop['Label'],
+#                                                     test_size=0.3,
+#                                                     random_state=23, stratify=Data_drop['Label'])
+# train_weights = X_train["weights"].copy()
 
 if OptimizeHyperPrams:
-    num_round = 100
-    xgbmodel = xgb.train(xgb_params, dtrain, num_round)
+    def optimize_xgb(config, checkpoint_dir=None, data=None):
+        # Load the breast cancer dataset
+        # Set the XGBoost parameters from the config
+        params = {
+            'objective': 'binary:logistic',
+            'eval_metric': 'auc',
+            'max_depth': config['max_depth'],
+            'subsample': config['subsample'],
+            'eta': config['learning_rate'],
+            'gamma': config['gamma']
+        }
 
-    y_pred = xgbmodel.predict(dtest)
+        # Create the XGBoost classifier
+        xgb_clf = xgb.XGBClassifier(**params)
 
-    params_space = {'max_depth': hp.quniform("max_depth", 4, 11, 1),
-                    'gamma': hp.uniform('gamma', 1, 9),
-                    'reg_alpha': hp.quniform('reg_alpha', 40, 180, 1),
-                    'reg_lambda': hp.uniform('reg_lambda', 0, 1),
-                    'colsample_bytree': hp.uniform('colsample_bytree', 0.5, 1),
-                    'min_child_weight': hp.quniform('min_child_weight', 0, 10, 1),
-                    'n_estimators': hp.quniform("n_estimators", 40, 120, 5),
-                    'seed': 0
-                    }
+        # Train the model
+        xgb_clf.fit(config["X"], config["y"])
 
-    trials = Trials()
+        # Compute the validation accuracy
+        accuracy = xgb_clf.score(config["X"], config["y"])
 
-    best_hyperparams = fmin(fn=objective,
-                            space=params_space,
-                            algo=tpe.suggest,
-                            max_evals=100,
-                            trials=trials)
+        # Save the checkpoint for future resumption
+        with tune.checkpoint_dir(step=0) as checkpoint_dir:
+            path = f"{checkpoint_dir}/checkpoint"
+            xgb_clf.save_model(path)
 
-    print("The best hyperparameters are : ", "\n")
-    print(best_hyperparams)
+        tune.report(accuracy=accuracy)
 
-param = {'max_depth': 8,  # Set the maximum depth of the trees to 8
-         'objective': 'binary:logistic',  # Use binary logistic regression for binary classification
-         'eval_metric': 'aucpr'  # Use AUCPR to evaluate the model's performance
-         }
+
+    config = {'max_depth': tune.randint(4, 11),
+              'subsample': tune.uniform(0.5, 1.0),
+              'learning_rate': tune.loguniform(1e-4, 1e-1),
+              'gamma': tune.uniform(0.0, 1.0),
+              "X": X_train,
+              "y": y_train}
+    # Configure the Ray Tune search
+    analysis = tune.run(
+        optimize_xgb,
+        config=config,
+        num_samples=10,
+        resources_per_trial={'cpu': 1},
+        metric='accuracy',
+        mode='max',
+        local_dir='./ray_results'
+    )
+
+    param = {'max_depth': analysis.best_config['max_depth'],
+             'gamma': 0.448706,
+             'learning_rate': 0.0142558,
+             'subsample': 0.942048,
+             'objective': 'binary:logistic',  # Use binary logistic regression for binary classification
+             'eval_metric': 'aucpr'  # Use AUCPR to evaluate the model's performance
+             }
+else:
+
+    param = {'max_depth': 8,  # Set the maximum depth of the trees to 8
+             'objective': 'binary:logistic',  # Use binary logistic regression for binary classification
+             'eval_metric': 'aucpr'  # Use AUCPR to evaluate the model's performance
+             }
 num_round = 100
+if "weights" in X_train.columns:
+    del (X_train["weights"])
+
+train_weights = [1 if x == 0 else 1.2 for x in y_train]
+dtrain = xgb.DMatrix(X_train, label=y_train, weight=train_weights)  #
+dtest = xgb.DMatrix(X_test, label=y_test)
 
 xgbmodel = xgb.train(param, dtrain, num_round)
 
@@ -205,7 +262,6 @@ n_missed = np.sum([1 - y1 if y2 == 1 else 0 for y1, y2 in zip(y_pred_binary, y_t
 recall = recall_score(y_test, y_pred_binary)
 print("recall = ", recall, "accuracy = ", accuracy_score(y_test, y_pred_binary), "n_missed = ", n_missed, "n_falses",
       n_falses)
-
 
 xgbmodel.save_model(ModelFileName)
 export_features(Data_drop[features_to_use])

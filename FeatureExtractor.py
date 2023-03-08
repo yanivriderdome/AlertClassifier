@@ -131,6 +131,9 @@ def RemoveUnwantedColumns(Data, columns_to_drop, AlertType):
             del (Data_drop[col])
 
     for i in range(16):
+        if 'Distances[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['Distances[' + str(i) + ']'])
+
         if 'BoxWidths[' + str(i) + ']' in Data_drop.columns:
             del (Data_drop['BoxWidths[' + str(i) + ']'])
         if 'BoxHeights[' + str(i) + ']' in Data_drop.columns:
