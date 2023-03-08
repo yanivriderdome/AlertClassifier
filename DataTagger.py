@@ -4,9 +4,10 @@ import pandas as pd
 import numpy as np
 
 
-def BasicLabel(vehicle_class, Filename, label):
+def BasicLabel(vehicle_class, alert_type, Filename, label):
     if Filename.lower().find("false") != -1:
         return 0
+
     if vehicle_class == -1:
         return label
 
@@ -22,6 +23,11 @@ def BasicLabel(vehicle_class, Filename, label):
         return 0
     if vehicle_class == 0 and Filename.lower().find("car") == -1:
         return 0
+    if alert_type.lower().find("safe") != -1 and Filename.lower().find("safe") == -1:
+        return -1
+    if alert_type.lower().find("collision") != -1 and Filename.lower().find("collision") == -1:
+        return 0
+
     return label
 
 
@@ -84,13 +90,13 @@ def min_between_columns(label, Label_true):
 
 
 def CorrectAbsSpeed(df_tagged, new_df):
-    tagged_speed_df = df_tagged.loc[df_tagged['AbsoluteSpeedKMH'] != -1]
+    tagged_speed_df = df_tagged.loc[df_tagged['AbsSpeedKMH'] != -1]
     for ind in tagged_speed_df.index:
         filename = df_tagged["Black Box Filename"][ind]
         frame_number = df_tagged["Black Box Frame Number"][ind]
-        speed = df_tagged["AbsoluteSpeedKMH"][ind]
+        speed = df_tagged["AbsSpeedKMH"][ind]
         new_df[(new_df["Black Box Filename"] == filename) & (new_df["Black Box Filename"] == frame_number)][
-            "AbsoluteSpeedKMH"] = speed
+            "AbsSpeedKMH"] = speed
     return new_df
 
 
@@ -122,11 +128,13 @@ def retag_false_positives(df_new, df_false_positives):
     df_false_positives["Label_new"] = df_false_positives["Label"]
     df_new["Label_corrected"] = df_new["Label"]
     del(df_false_positives["Label"])
-    for i in [-1,0,1]:
+    for i in [-1, 0, 1]:
         df_temp = df_false_positives.copy()
         df_temp["Black Box Frame Number"] = df_false_positives["Black Box Frame Number"] + i
+        df_temp.drop_duplicates(inplace=True)
+        # df_temp2 = df_new[['Black Box Filename', "Alert Type",  "id_per_video", "Black Box Frame Number"]]
         df_new = pd.merge(df_new, df_temp[['Black Box Filename', "Alert Type", "id_per_video", "Black Box Frame Number", "Label_new"]],
-                             how='left', on=['Black Box Filename',"Alert Type",  "id_per_video", "Black Box Frame Number"])
+                             how='left', on=['Black Box Filename', "Alert Type",  "id_per_video", "Black Box Frame Number"])
         df_new["Label_new"].fillna(10, inplace=True)
         df_new["Label_corrected"] = df_new.apply(lambda x: min(x["Label_corrected"], x["Label_new"]) if x["Label_new"]!= 2 else x["Label_new"], axis=1)
         del(df_new["Label_new"])
@@ -139,7 +147,9 @@ def LabelData(new_data_filename, tagged_data_filename=None):
 
     df_tagged = pd.read_csv(tagged_data_filename)
     df_new = pd.read_csv(new_data_filename)
-    df_new.sort_values(by=['Black Box Filename', "Id", "Black Box Frame Number"], inplace=True)
+    # df_new.sort_values(by=['Black Box Filename', "Id", "Black Box Frame Number"], inplace=True)
+    df_new["Label"] = df_new.apply(lambda x: BasicLabel(x["Class"], x["Alert Type"],
+                                                        x["Black Box Filename"], x["Label"]), axis=1)
 
     min_id_per_video_new = get_min_id(df_new)
     df_new["id_per_video"] = df_new.apply(lambda x: set_min_id(x["Id"], x["Black Box Filename"], min_id_per_video_new),
@@ -150,7 +160,6 @@ def LabelData(new_data_filename, tagged_data_filename=None):
     df_tagged = pd.read_csv(tagged_data_filename)
     df_new = FixFileNames(df_new)
     df_new.sort_values(by=['Black Box Filename', "Id","Black Box Frame Number"], inplace=True)
-    df_new["Label"] = df_new.apply(lambda x: BasicLabel(x["Class"], x["Black Box Filename"], x["Label"]), axis=1)
 
     df_false_positives = df_tagged[
         df_tagged.apply(lambda x: x['Black Box Filename'].lower().find("false") == -1 and x["Label"] != 1,
@@ -174,4 +183,12 @@ def LabelData(new_data_filename, tagged_data_filename=None):
     df_new = df_new[cols2]
     df_new.to_csv(new_data_filename.replace(".csv", "_tagged_NEW.csv"), index=False)
     # df_new = CorrectAbsSpeed(df_tagged, df_new)
+    return df_new
+
+
+def merge_speeds(df, df_speeds):
+    del(df_speeds["text"])
+    df_new = pd.merge(df, df_speeds,
+                      how='left', on=['Black Box Filename', "Black Box Frame Number"])
+    # df_new.to_csv("FrontAlertsSpeeds.csv")
     return df_new

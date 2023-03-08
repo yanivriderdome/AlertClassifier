@@ -8,6 +8,7 @@ import math
 from sklearn.model_selection import train_test_split, RepeatedStratifiedKFold
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 
+
 def get_speed_from_text(text):
     parsed_text = str(text).split(" ")
     if len(parsed_text) > 2:
@@ -111,33 +112,50 @@ def get_curvature(X, Y):
 def get_Xcoordinate(H1, H2, H3, H4, H5, H6, H7, H8, factor):
     return np.asarray([h * factor for h in [H1, H2, H3, H4, H5, H6, H7, H8]])
 
-def OneHotEncoding(Data):
+
+def OneHotEncoding(Data_orig):
+    Data = Data_orig.copy()
     # Data = Data[Data["Counter"] == 8]
     Data["Car"] = np.where(Data['Class'] == 0, 1.0, 0.0)
     Data["Bus"] = np.where(Data['Class'] == 1, 1.0, 0.0)
     Data["Truck"] = np.where(Data['Class'] == 2, 1.0, 0.0)
     Data["MotorCycle"] = np.where(Data['Class'] == 3, 1.0, 0.0)
+    del (Data["Class"])
     return Data
 
-def RemoveUnwantedColumns(Data, columns_to_drop):
+
+def RemoveUnwantedColumns(Data, columns_to_drop, AlertType):
     Data_drop = Data.copy()
     for col in columns_to_drop:
         if col in Data_drop.columns:
             del (Data_drop[col])
 
-    for i in range(8):
+    for i in range(16):
         if 'BoxWidths[' + str(i) + ']' in Data_drop.columns:
             del (Data_drop['BoxWidths[' + str(i) + ']'])
         if 'BoxHeights[' + str(i) + ']' in Data_drop.columns:
             del (Data_drop['BoxHeights[' + str(i) + ']'])
-        del (Data_drop['BoxCenters[' + str(i) + ']'])
-        del (Data_drop['BoxBottoms[' + str(i) + ']'])
-        del (Data_drop['Angles[' + str(i) + ']'])
-        del (Data_drop['Distances[' + str(i) + ']'])
+        if 'BoxCenters[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['BoxCenters[' + str(i) + ']'])
+        if 'BoxBottoms[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['BoxBottoms[' + str(i) + ']'])
+        if 'Angles[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['Angles[' + str(i) + ']'])
+        if 'Angles[' + str(i) + ']' in Data_drop.columns:
+            del (Data_drop['Angles[' + str(i) + ']'])
         if 'TimeDeltas[' + str(i) + ']' in Data_drop.columns:
             del (Data_drop['TimeDeltas[' + str(i) + ']'])
+    if AlertType != 'BlindSpots':
+        for col in ['id_per_video', 'MaxBoxArea', 'MinBoxArea', 'MaxBoxBottom', 'MinBoxBottom', 'MaxAngle', 'MinAngle',
+                    'MaxDistance', 'MinDistance', 'Counter', 'MaxDistanceToSideOuter', "MedianVelocity","RelativeSpeedKMH",
+                    'MaxDistanceToSideInner', "HeightOverWidthIntercept", "MaxAngleToCloserSide",
+                    "MinAngleToCloserSide"]:
+            if col in Data_drop.columns:
+                del (Data_drop[col])
 
     return Data_drop
+
+
 def get_curvatureX(X, Y):
     dY = np.asarray(Y[1:]) - np.asarray(Y[:-1])
     dX = np.asarray(X[1:]) - np.asarray(X[:-1])
@@ -247,11 +265,16 @@ def export_features(feature_Vec):
         if feature == 'Label':
             continue
         if feature.find("Abs_") == -1 and not feature.lower() in \
-                                              ["truck", "bus", "car", "MotorCycle", "motorcycle",
-                                               "BoxCenterMovementInY", "DistanceToInnerSideDiff",
-                                               "HeightOverWidthIntercept", "DistanceToInnerDiff",
+                                              ["truck", "bus", "car", "motorcycle", "maxminanglecloserside",
+                                                "boxcentermovementiny","movementangletan",
+                                               "distancetoinnersidesiff", "angleminusmin",
+                                               "distancetoinnersiff", "MaxMinAngleCloserSide",
                                                "BoxCenterMovementInX", "BoxCenterNormalizedMovementInX"]:
             feature = "Values." + feature
+        if feature in \
+                ["Truck", "Bus", "Car", "MotorCycle", 'Values.SideDetected', 'Values.LaneSplitting', 'Values.RearDetected', 'Values.FrontDetected']:
+            feature = "r32(" + feature + ")"
+
         print(feature + ",", file=File)
     File.close()
 
@@ -319,7 +342,8 @@ def remove_outliers(vec, quant=0.05):
     vec[vec > np.quantile(vec, 1 - quant)] = np.quantile(vec, 1 - quant)
     return vec
 
-def model_training2(X_train, X_test, y_train, y_test, best_hyperparams):
+
+def model_training_old(X_train, X_test, y_train, y_test, best_hyperparams):
     accuracy_score_all = []
     precision_list_test = []
     recall_list_test = []
@@ -374,7 +398,7 @@ def model_training2(X_train, X_test, y_train, y_test, best_hyperparams):
     print("Average recall: ", average_recall_score_all)
     print("Average fscore: ", average_fscore_score_all)
     print()
-    score = { "accuracy": average_accuracy_score_all,
+    score = {"accuracy": average_accuracy_score_all,
              "precision": average_precision_score_all, "recall": average_recall_score_all,
              "fscore": average_fscore_score_all}
     return model, score
@@ -397,6 +421,7 @@ def objective(space, X_train, X_test, y_train, y_test):
     print("SCORE:", accuracy)
     return {'loss': -accuracy, 'status': STATUS_OK}
 
+
 def model_train(Data_drop, features, n_estimators=40, max_depth=8):
     X_train, X_test, y_train, y_test = train_test_split(Data_drop[features], Data_drop['Label'], test_size=0.3,
                                                         random_state=23, stratify=Data_drop['Label'])
@@ -412,6 +437,7 @@ def model_train(Data_drop, features, n_estimators=40, max_depth=8):
     accuracy_trues = 1 - np.sum(abs(model_RFE.predict(X_test_trues) - 1)) / len(X_test_trues.index)
     print("Trues accuracy", accuracy_trues, ",", np.sum(abs(model_RFE.predict(X_test_trues) - 1)), "Missed Trues")
     return model_RFE
+
 
 def model_training(X_train, X_test, y_train, y_test, n_estimators=30, depth=5, Lambda=0):
     random_state = 123
