@@ -3,11 +3,14 @@ import os
 import matplotlib.pyplot as plt
 import xgboost as xgb
 from scipy.stats import gaussian_kde
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score, roc_auc_score
 import math
 from sklearn.model_selection import train_test_split, RepeatedStratifiedKFold
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
-
+import csv
+from datetime import datetime
+import json
+import pandas as pd
 
 def get_speed_from_text(text):
     parsed_text = str(text).split(" ")
@@ -119,16 +122,85 @@ def OneHotEncoding(Data_orig):
     Data["Car"] = np.where(Data['Class'] == 0, 1.0, 0.0)
     Data["Bus"] = np.where(Data['Class'] == 1, 1.0, 0.0)
     Data["Truck"] = np.where(Data['Class'] == 2, 1.0, 0.0)
-    Data["MotorCycle"] = np.where(Data['Class'] == 3, 1.0, 0.0)
+    Data["Motorcycle"] = np.where(Data['Class'] == 3, 1.0, 0.0)
     del (Data["Class"])
     return Data
 
 
+def ConvertUnits(df, ConversionFactor=1.5):
+    keys = [
+        "Distance",
+        "DistanceX",
+        "DistanceY",
+        "MedianDistance",
+        "MedianDistanceX",
+        "MedianDistanceY",
+        "FinalDistance",
+        "FinalDistanceX",
+        "FinalDistanceY",
+        "DistanceXToFurtherSide",
+        "MomentarySpeed",
+        "MomentarySpeed16",
+        "MedianVelocity",
+        "RelativeSpeedKMH",
+        "AbsXFit.Slope",
+        "AbsXFit.Intercept",
+        "YFit.Slope",
+        "YFit.Intercept",
+        "DistancesFit.Slope",
+        "DistancesFit.Intercept",
+        "PredictedX",
+        "PredictedFinalX",
+        "MaxMinDist8Frames",
+        "MaxMinDistXSeries",
+        "DistanceOverArea",
+        "XFitRadius"
+    ]
+    for column in keys:
+        if column in df.columns:
+            df[column] = df[column] * ConversionFactor
+    return df
+
+
+def ConvertUnitsButX(df, ConversionFactor=1.5):
+    keys = [
+        "Distance",
+        "DistanceY",
+        "MedianDistance",
+        "MedianDistanceY",
+        "FinalDistance",
+        "FinalDistanceY",
+        "DistanceXToFurtherSide",
+        "MomentarySpeed",
+        "MomentarySpeed16",
+        "MedianVelocity",
+        "RelativeSpeedKMH",
+        "YFit.Slope",
+        "YFit.Intercept",
+        "DistancesFit.Slope",
+        "DistancesFit.Intercept",
+        "PredictedFinalX",
+        "DistanceOverArea",
+        "XFitRadius"
+    ]
+    for column in keys:
+        if column in df.columns:
+            df[column] = df[column] * ConversionFactor
+    return df
+
+
 def RemoveUnwantedColumns(Data, columns_to_drop, AlertType):
     Data_drop = Data.copy()
+    for col in Data_drop.columns:
+        if "score" in col.lower():
+            del (Data_drop[col])
+
     for col in columns_to_drop:
         if col in Data_drop.columns:
             del (Data_drop[col])
+    for i in range(8):
+        if 'Scores[' + str(i) + ']' in Data_drop.columns or "LabelPrevious" in Data_drop.columns:
+            del (Data_drop['Scores[' + str(i) + ']'])
 
     for i in range(16):
         if 'Distances[' + str(i) + ']' in Data_drop.columns:
@@ -148,14 +220,9 @@ def RemoveUnwantedColumns(Data, columns_to_drop, AlertType):
             del (Data_drop['Angles[' + str(i) + ']'])
         if 'TimeDeltas[' + str(i) + ']' in Data_drop.columns:
             del (Data_drop['TimeDeltas[' + str(i) + ']'])
-    if AlertType != 'BlindSpots':
-        for col in ['id_per_video', 'MaxBoxArea', 'MinBoxArea', 'MaxBoxBottom', 'MinBoxBottom', 'MaxAngle', 'MinAngle',
-                    'MaxDistance', 'MinDistance', 'Counter', 'MaxDistanceToSideOuter', "MedianVelocity","RelativeSpeedKMH",
-                    'MaxDistanceToSideInner', "HeightOverWidthIntercept", "MaxAngleToCloserSide",
-                    "MinAngleToCloserSide"]:
-            if col in Data_drop.columns:
-                del (Data_drop[col])
-
+    for col in Data_drop.columns:
+        if "[" in col and "]" in col:
+            del (Data_drop[col])
     return Data_drop
 
 
@@ -262,23 +329,20 @@ def add_features(df):
     return df
 
 
-def export_features(feature_Vec):
+def export_features(feature_Vec, original_columns, dtypes):
     File = open('Features.txt', 'w')
     for feature in feature_Vec:
         if feature == 'Label':
             continue
-        if feature.find("Abs_") == -1 and not feature.lower() in \
-                                              ["truck", "bus", "car", "motorcycle", "maxminanglecloserside",
-                                                "boxcentermovementiny","movementangletan",
-                                               "distancetoinnersidesiff", "angleminusmin",
-                                               "distancetoinnersiff", "MaxMinAngleCloserSide",
-                                               "BoxCenterMovementInX", "BoxCenterNormalizedMovementInX"]:
-            feature = "Values." + feature
+        feature_to_export = feature
+        if feature in original_columns:
+            feature_to_export = "Values." + feature
         if feature in \
-                ["Truck", "Bus", "Car", "MotorCycle", 'Values.SideDetected', 'Values.LaneSplitting', 'Values.RearDetected', 'Values.FrontDetected']:
-            feature = "r32(" + feature + ")"
-
-        print(feature + ",", file=File)
+                ["Truck", "Bus", "Car", "MotorCycle", 'SideDetected', 'LaneSplitting', 'RearDetected', 'FrontDetected',
+                 'InTheSameLane']:
+            feature_to_export = "r32(" + feature_to_export + ")"
+        feature_to_export = feature_to_export.replace("/", "Over")
+        print(feature_to_export + ",", file=File)
     File.close()
 
 
@@ -346,65 +410,28 @@ def remove_outliers(vec, quant=0.05):
     return vec
 
 
-def model_training_old(X_train, X_test, y_train, y_test, best_hyperparams):
-    accuracy_score_all = []
-    precision_list_test = []
-    recall_list_test = []
-    fscore_list_test = []
-    global model
-    # del (X['Label'])
-    for i in range(0, 9):
-        xgb_model = xgb.XGBClassifier(n_estimators=int(best_hyperparams['n_estimators']),
-                                      max_depth=int(best_hyperparams['max_depth']), gamma=best_hyperparams['gamma'],
-                                      colsample_bytree=best_hyperparams['colsample_bytree'],
-                                      min_child_weight=best_hyperparams['min_child_weight'],
-                                      reg_lambda=best_hyperparams['reg_lambda'],
-                                      reg_alpha=best_hyperparams['reg_alpha'])  # scale_pos_weight = 0.35,
-        # default parameter for XGBoost classifier
-        model = xgb_model.fit(X_train, y_train)
+def get_series_ratio(data_series):
+    epsilon = 1e-10  # Assuming epsilon value, you can adjust as needed
 
-        pred_train = xgb_model.predict(X_train)
-        pred_test = xgb_model.predict(X_test)
-        # pred_val = xgb_model.predict(X_val)
+    if len(data_series) == 1:
+        return 1.0
+    elif len(data_series) == 2:
+        return data_series[1] / (data_series[0] + epsilon)
+    elif len(data_series) == 3:
+        return data_series[2] / (data_series[0] + epsilon)
+    elif len(data_series) == 4:
+        return (data_series[3] + data_series[2]) / (data_series[1] + data_series[0] + epsilon)
+    elif len(data_series) == 5:
+        return (data_series[4] + data_series[3]) / (data_series[1] + data_series[0] + epsilon)
+    elif len(data_series) == 6:
+        return (data_series[5] + data_series[4] + data_series[3]) / (
+                data_series[2] + data_series[1] + data_series[0] + epsilon)
+    elif len(data_series) == 7:
+        return (data_series[5] + data_series[4] + data_series[6]) / (
+                data_series[2] + data_series[1] + data_series[0] + epsilon)
 
-        accuracy_train = accuracy_score(y_train, pred_train > 0.5)
-        accuracy_test = accuracy_score(y_test, pred_test > 0.5)
-        # accuracy_val = accuracy_score(y_val, pred_val>0.5)
-
-        # print("Train Accuracy SCORE:", accuracy_train)
-        # print("Test Accuracy SCORE:", accuracy_test)
-        # print ("Val Accuracy SCORE:", accuracy_val)
-
-        accuracy_score_all.append(accuracy_test)
-        # accuracy_score_val.append(accuracy_val)
-
-        precision_test, recall_test, fscore_test, _ = precision_recall_fscore_support(y_test, pred_test,
-                                                                                      average='weighted')
-        recall_list_test.append(recall_test)
-        recall_list_test.append(fscore_test)
-
-        # store the train performace values in list
-        precision_list_test.append(precision_test)
-        recall_list_test.append(recall_test)
-        fscore_list_test.append(fscore_test)
-
-        random_state = np.random.randint(100)
-        # acc_xgb = (preds == yv).sum().astype(float) / len(preds)*100
-
-    average_accuracy_score_all = np.mean(accuracy_score_all)
-    average_precision_score_all = np.mean(precision_list_test)
-    average_recall_score_all = np.mean(recall_list_test)
-    average_fscore_score_all = np.mean(fscore_list_test)
-    # average_accuracy_score_val= np.mean(accuracy_score_val)
-    print("Average test accuracy: ", average_accuracy_score_all)
-    print("Average precison: ", average_precision_score_all)
-    print("Average recall: ", average_recall_score_all)
-    print("Average fscore: ", average_fscore_score_all)
-    print()
-    score = {"accuracy": average_accuracy_score_all,
-             "precision": average_precision_score_all, "recall": average_recall_score_all,
-             "fscore": average_fscore_score_all}
-    return model, score
+    return (data_series[-4] + data_series[-3] + data_series[-2] + data_series[-1]) / (
+            data_series[-5] + data_series[-6] + data_series[-7] + data_series[-8])
 
 
 def objective(space, X_train, X_test, y_train, y_test):
@@ -425,87 +452,155 @@ def objective(space, X_train, X_test, y_train, y_test):
     return {'loss': -accuracy, 'status': STATUS_OK}
 
 
-def model_train(Data_drop, features, n_estimators=40, max_depth=8):
-    X_train, X_test, y_train, y_test = train_test_split(Data_drop[features], Data_drop['Label'], test_size=0.3,
-                                                        random_state=23, stratify=Data_drop['Label'])
-
-    # X_test, X_validation, y_test, y_validation = train_test_split(X_test, y_test, test_size=0.7,
-    #                                                               random_state=23, stratify=y_test)
-    X_test_falses = Data_drop[features][Data_drop['Label'] == 0]
-    X_test_trues = Data_drop[features][Data_drop['Label'] == 1]
-
-    model_RFE, best_score = model_training(X_train, X_test, y_train, y_test, n_estimators, max_depth)
-    accuracy_falses = 1 - np.sum(abs(model_RFE.predict(X_test_falses))) / len(X_test_falses.index)
-    print("Falses accuracy", accuracy_falses, ",", np.sum(model_RFE.predict(X_test_falses)), "Falses")
-    accuracy_trues = 1 - np.sum(abs(model_RFE.predict(X_test_trues) - 1)) / len(X_test_trues.index)
-    print("Trues accuracy", accuracy_trues, ",", np.sum(abs(model_RFE.predict(X_test_trues) - 1)), "Missed Trues")
-    return model_RFE
+def get_last_index(list):
+    file = list[-1]
+    file = file.split("Spot_")[-1]
+    return int(file.split("_")[0])
 
 
-def model_training(X_train, X_test, y_train, y_test, n_estimators=30, depth=5, Lambda=0):
-    random_state = 123
-    accuracy_score_all = []
-    precision_list_test = []
-    recall_list_test = []
-    fscore_list_test = []
-    global model
-    # del (X['Label'])
-    for i in range(0, 9):
-        # print("Random_state", random_state)
-        # Xt, Xv, yt, yv = train_test_split(X_SDA, y_SDA , test_size=0.3, random_state=random_state,stratify=y_SDA)
+def get_recall_per_files(df):
+    filtered_df = df[~df['Black Box Filename'].str.contains("False")]
+    filtered_df = filtered_df[filtered_df["ClassifierScore"] > 0.6]
+    filenames = filtered_df['lack Box Filename'].unique()
+    filenames = [file for file in filenames if "_Spot_Marginal" not in file]
+    bike_right = [file for file in filenames if file.startswith("Bike_Right")]
+    bike_left = [file for file in filenames if file.startswith("Bike_Left") and not "And_Right" in file]
+    left = [file for file in filenames if file.startswith("Left") and not "And_Right" in file]
+    right = [file for file in filenames if file.startswith("Right")]
+    n_bike_right = get_last_index(bike_right)
+    n_bike_left = get_last_index(bike_left)
+    n_left = get_last_index(left)
+    n_right = get_last_index(right)
 
-        # X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, test_size=0.5)
-        # dt = xgb.DMatrix(Xt, Label=yt.values)
-        # dv = xgb.DMatrix(Xv, Label=yv.values)
-        # scale_pos_weight=-1 + 1 / np.mean(y),
-        xgb_model = xgb.XGBClassifier(n_estimators=n_estimators, max_depth=depth,
-                                      reg_lambda=Lambda)  # scale_pos_weight = 0.35,
-        # default parameter for XGBoost classifier
-        model = xgb_model.fit(X_train, y_train)
+    return {"Bike": (len(bike_right) + len(bike_left)) / (n_bike_left + n_bike_right),
+            "Other": (len(right) + len(left)) / (n_left + n_right)}
 
-        pred_train = xgb_model.predict(X_train)
-        pred_test = xgb_model.predict(X_test)
-        # pred_val = xgb_model.predict(X_val)
 
-        accuracy_train = accuracy_score(y_train, pred_train > 0.5)
-        accuracy_test = accuracy_score(y_test, pred_test > 0.5)
-        # accuracy_val = accuracy_score(y_val, pred_val>0.5)
+def model_train(df, features, alert_type, params={}, true_weight=1, threshold=0.6):
+    num_round = 100
+    X_train, X_test, y_train, y_test = train_test_split(df[features], df['Label'],
+                                                        test_size=0.2,
+                                                        random_state=23, stratify=df['Label'])
+    weights = np.ones(len(y_train))
+    weights[y_train == 1] = true_weight
 
-        # print("Train Accuracy SCORE:", accuracy_train)
-        # print("Test Accuracy SCORE:", accuracy_test)
-        # print ("Val Accuracy SCORE:", accuracy_val)
+    if true_weight != 1:
+        dtrain = xgb.DMatrix(X_train, label=y_train, weight=weights)
 
-        accuracy_score_all.append(accuracy_test)
-        # accuracy_score_val.append(accuracy_val)
+        dtest = xgb.DMatrix(X_test, label=y_test)
+    else:
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        dtest = xgb.DMatrix(X_test, label=y_test)
 
-        precision_test, recall_test, fscore_test, _ = precision_recall_fscore_support(y_test, pred_test,
-                                                                                      average='weighted')
-        recall_list_test.append(recall_test)
-        recall_list_test.append(fscore_test)
+    xgbmodel = xgb.train(params, dtrain, num_round)
 
-        # store the train performace values in list
-        precision_list_test.append(precision_test)
-        recall_list_test.append(recall_test)
-        fscore_list_test.append(fscore_test)
+    y_pred = xgbmodel.predict(dtest)
+    y_pred_binary = [1 if p >= threshold else 0 for p in y_pred]
+    n_falses = np.sum([y1 if y2 == 0 else 0 for y1, y2 in zip(y_pred_binary, y_test)])
+    n_missed = np.sum([1 - y1 if y2 == 1 else 0 for y1, y2 in zip(y_pred_binary, y_test)])
+    recall = recall_score(y_test, y_pred_binary)
+    print("recall = ", recall, "precision = ", precision_score(y_test, y_pred_binary),
+          "accuracy = ", accuracy_score(y_test, y_pred_binary), "F1 = ", f1_score(y_test, y_pred_binary),
+          "n_points = ", len(y_pred), "n_missed = ", n_missed,
+          "n_falses", n_falses, "auc", roc_auc_score(y_test, y_pred)
+        )
 
-        random_state = np.random.randint(100)
-        # acc_xgb = (preds == yv).sum().astype(float) / len(preds)*100
+    folder_name = "model_statistics"
 
-    average_accuracy_score_all = np.mean(accuracy_score_all)
-    average_precision_score_all = np.mean(precision_list_test)
-    average_recall_score_all = np.mean(recall_list_test)
-    average_fscore_score_all = np.mean(fscore_list_test)
-    # average_accuracy_score_val= np.mean(accuracy_score_val)
-    print("n_estimators = ", n_estimators, "max_depth = ", depth)
-    print("Average test accuracy: ", average_accuracy_score_all)
-    print("Average precison: ", average_precision_score_all)
-    print("Average recall: ", average_recall_score_all)
-    print("Average fscore: ", average_fscore_score_all)
-    print()
-    score = {"n_estimators": n_estimators, "depth": depth, "accuracy": average_accuracy_score_all,
-             "precision": average_precision_score_all, "recall": average_recall_score_all,
-             "fscore": average_fscore_score_all}
-    return model, score
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
+    csv_filename = os.path.join(folder_name, alert_type + "_statistics.csv")
+
+    current_datetime = datetime.now()
+    current_date = current_datetime.strftime("%Y-%m-%d")
+    current_time = current_datetime.strftime("%H:%M:%S")
+    # recall_files = get_recall_per_files(df)
+
+    data = {
+        "Date": current_date,
+        "Time": current_time,
+        "recall": recall,
+        "precision": precision_score(y_test, y_pred_binary),
+        "accuracy": accuracy_score(y_test, y_pred_binary),
+        "auc": roc_auc_score(y_test, y_pred),
+        "F1": f1_score(y_test, y_pred_binary),
+        "n_points": len(y_test),
+        "n_missed": n_missed,
+        "n_falses": n_falses,
+        "true_weight": true_weight
+        # "recall_bike_file": recall_files["Bike"],
+        # "recall_other_file": recall_files["Other"]
+    }
+    file_exists = os.path.isfile(csv_filename)
+
+    with open(csv_filename, 'a', newline='') as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=data.keys())
+        if not file_exists:
+            csv_writer.writeheader()
+
+        csv_writer.writerow(data)
+
+    return xgbmodel
+
+def generate_lines(filename, features):
+    with open(filename, 'w') as file:
+        sorted_features = sorted(features)
+        for item in sorted_features:
+            line = f'Model->SetFeature("{item}", Values.{item});\n'
+            file.write(line)
+def get_features_from_file(ModelFileName):
+    with open(ModelFileName, "r") as json_file:
+        model_json = json.load(json_file)
+    return model_json['learner']['feature_names']
+
+
+def model_statistics(filename, score_column, alert_type):
+    df = pd.read_csv(filename)
+    y = df["Label"]
+    y_pred = df[score_column]
+    y_pred_binary = [1 if p >= 0.7 else 0 for p in y_pred]
+    n_falses = np.sum([y1 if y2 == 0 else 0 for y1, y2 in zip(y_pred_binary, y)])
+    n_missed = np.sum([1 - y1 if y2 == 1 else 0 for y1, y2 in zip(y_pred_binary, y)])
+    recall = recall_score(y, y_pred_binary)
+    print("recall = ", recall, "precision = ", precision_score(y, y_pred_binary),
+          "accuracy = ", accuracy_score(y, y_pred_binary), "F1 = ", f1_score(y, y_pred_binary),
+          "n_points = ", len(y_pred), "n_missed = ", n_missed,
+          "n_falses", n_falses)
+
+    folder_name = "model_statistics"
+
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
+    csv_filename = os.path.join(folder_name, alert_type + "_statistics.csv")
+
+    current_datetime = datetime.now()
+    current_date = current_datetime.strftime("%Y-%m-%d")
+    current_time = current_datetime.strftime("%H:%M:%S")
+    # recall_files = get_recall_per_files(df)
+
+    data = {
+        "Date": current_date,  # Add the current date as the first column
+        "Time": current_time,  # Add the current time as the second column
+        "recall": recall,
+        "precision": precision_score(y, y_pred_binary),
+        "accuracy": accuracy_score(y, y_pred_binary),
+        "F1": f1_score(y, y_pred_binary),
+        "n_points": len(y),
+        "n_missed": n_missed,
+        "n_falses": n_falses,
+        # "recall_bike_file": recall_files["Bike"],
+        # "recall_other_file": recall_files["Other"]
+    }
+    file_exists = os.path.isfile(csv_filename)
+
+    with open(csv_filename, 'a', newline='') as csvfile:
+        csv_writer = csv.DictWriter(csvfile, fieldnames=data.keys())
+        if not file_exists:
+            csv_writer.writeheader()
+
+        csv_writer.writerow(data)
+
+    return
 
 
 def check_accuracy(df, videos_directory, alert_string):
